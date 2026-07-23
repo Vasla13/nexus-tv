@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="utf-8">
+    <title>NEXUS TV</title>
+    <style>
+        html, body { margin: 0; height: 100%; background: #000; overflow: hidden; }
+        #player, iframe { width: 100vw; height: 100vh; border: 0; display: block; }
+    </style>
+</head>
+<body>
+    <!--
+      Lecteur YouTube de la télévision de l'école.
+
+      Chargé DANS le jeu par un DUI. YouTube refuse un /embed nu ouvert sans
+      page parente (erreur 153 « player configuration error ») : il exige une
+      origine. Cette page en fournit une (son propre window.location.origin),
+      passée à l'API IFrame, ce qui lève l'erreur.
+
+      L'ID de la vidéo arrive en paramètre : tvplayer.html?v=<id>&start=<sec>.
+    -->
+    <div id="player"></div>
+    <script>
+        var params = new URLSearchParams(location.search);
+        var videoId = (params.get('v') || '').replace(/[^\w-]/g, '');
+        var start = parseInt(params.get('start') || '0', 10) || 0;
+
+        var tag = document.createElement('script');
+        tag.src = 'https://www.youtube.com/iframe_api';
+        document.head.appendChild(tag);
+
+        function onYouTubeIframeAPIReady() {
+            if (!videoId) return;
+            new YT.Player('player', {
+                videoId: videoId,
+                playerVars: {
+                    autoplay: 1,
+                    controls: 0,
+                    rel: 0,
+                    fs: 0,
+                    disablekb: 1,
+                    playsinline: 1,
+                    modestbranding: 1,
+                    start: start,
+                    // L'origine explicite est ce qui règle l'erreur 153.
+                    origin: location.origin
+                },
+                events: {
+                    onReady: function (e) {
+                        // Démarrage muet puis réactivation du son : contourne le
+                        // blocage d'autoplay sonore de Chromium.
+                        e.target.mute();
+                        e.target.playVideo();
+                        setTimeout(function () {
+                            e.target.unMute();
+                            e.target.setVolume(85);
+                        }, 400);
+                    },
+                    onStateChange: function (e) {
+                        // Reprend en boucle à la fin.
+                        if (e.data === YT.PlayerState.ENDED) e.target.playVideo();
+                    }
+                }
+            });
+        }
+    </script>
+</body>
+</html>
