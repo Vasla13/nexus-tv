@@ -5,64 +5,131 @@
     <title>NEXUS TV</title>
     <style>
         html, body { margin: 0; height: 100%; background: #000; overflow: hidden; }
-        #player, iframe { width: 100vw; height: 100vh; border: 0; display: block; }
+        #video, #yt { width: 100vw; height: 100vh; border: 0; display: block; background: #000; object-fit: contain; }
+        .hidden { display: none !important; }
     </style>
 </head>
 <body>
     <!--
-      Lecteur YouTube de la télévision de l'école.
+      Lecteur TV du serveur NEXUS RP (school_rp), chargé dans le jeu par un DUI.
 
-      Chargé DANS le jeu par un DUI. YouTube refuse un /embed nu ouvert sans
-      page parente (erreur 153 « player configuration error ») : il exige une
-      origine. Cette page en fournit une (son propre window.location.origin),
-      passée à l'API IFrame, ce qui lève l'erreur.
+      Objectif : jouer la vidéo SANS PUBLICITÉ. On ne passe donc PAS par le
+      lecteur YouTube (qui impose ses pubs) mais par des instances Invidious —
+      des frontends YouTube libres qui servent le flux vidéo proxifié, sans pub.
+      On les essaie dans l'ordre ; la première qui répond gagne.
 
-      L'ID de la vidéo arrive en paramètre : tvplayer.html?v=<id>&start=<sec>.
+      Filet de sécurité : si AUCUNE instance ne répond (elles sont
+      communautaires et parfois hors-ligne), on retombe sur le lecteur YouTube
+      classique — avec pubs, mais la télé ne reste jamais noire.
+
+      Hébergé sur un domaine public (GitHub Pages) : c'est ce qui donne une
+      origine valide et évite l'erreur 153 de YouTube.
+
+      Usage : tvplayer.html?v=<ID>&start=<secondes>
     -->
-    <div id="player"></div>
+    <video id="video" autoplay playsinline></video>
+    <div id="yt" class="hidden"></div>
+
     <script>
         var params = new URLSearchParams(location.search);
         var videoId = (params.get('v') || '').replace(/[^\w-]/g, '');
         var start = parseInt(params.get('start') || '0', 10) || 0;
 
-        var tag = document.createElement('script');
-        tag.src = 'https://www.youtube.com/iframe_api';
-        document.head.appendChild(tag);
+        var video = document.getElementById('video');
 
-        function onYouTubeIframeAPIReady() {
-            if (!videoId) return;
-            new YT.Player('player', {
-                videoId: videoId,
-                playerVars: {
-                    autoplay: 1,
-                    controls: 0,
-                    rel: 0,
-                    fs: 0,
-                    disablekb: 1,
-                    playsinline: 1,
-                    modestbranding: 1,
-                    start: start,
-                    // L'origine explicite est ce qui règle l'erreur 153.
-                    origin: location.origin
-                },
-                events: {
-                    onReady: function (e) {
-                        // Démarrage muet puis réactivation du son : contourne le
-                        // blocage d'autoplay sonore de Chromium.
-                        e.target.mute();
-                        e.target.playVideo();
-                        setTimeout(function () {
-                            e.target.unMute();
-                            e.target.setVolume(85);
-                        }, 400);
-                    },
-                    onStateChange: function (e) {
-                        // Reprend en boucle à la fin.
-                        if (e.data === YT.PlayerState.ENDED) e.target.playVideo();
-                    }
-                }
+        // Instances Invidious à essayer, dans l'ordre. Modifiables ici sans
+        // toucher au jeu (ce fichier est sur GitHub Pages).
+        var INSTANCES = [
+            'https://yewtu.be',
+            'https://invidious.nerdvpn.de',
+            'https://inv.nadeko.net',
+            'https://invidious.jing.rocks',
+            'https://iv.ggtyler.dev'
+        ];
+        // itag 22 = 720p (image+son), 18 = 360p (image+son) en repli.
+        var ITAGS = [22, 18];
+
+        // Toutes les sources candidates, instance par instance.
+        var sources = [];
+        INSTANCES.forEach(function (inst) {
+            ITAGS.forEach(function (itag) {
+                sources.push(inst + '/latest_version?id=' + videoId + '&itag=' + itag + '&local=true');
             });
+        });
+
+        var idx = -1;
+        var attemptTimer = null;
+
+        function enableSound() {
+            // Réactive le son : nécessite un geste utilisateur, fourni par le
+            // clic injecté dans le DUI côté jeu.
+            video.muted = false;
+            video.volume = 0.9;
         }
+        document.addEventListener('click', enableSound);
+        document.addEventListener('mousedown', enableSound);
+
+        function fallbackToYouTube() {
+            // Toutes les instances ont échoué : lecteur YouTube (avec pubs).
+            clearTimeout(attemptTimer);
+            video.classList.add('hidden');
+            var yt = document.getElementById('yt');
+            yt.classList.remove('hidden');
+
+            var tag = document.createElement('script');
+            tag.src = 'https://www.youtube.com/iframe_api';
+            document.head.appendChild(tag);
+            window.onYouTubeIframeAPIReady = function () {
+                new YT.Player('yt', {
+                    videoId: videoId,
+                    playerVars: {
+                        autoplay: 1, controls: 0, rel: 0, fs: 0, disablekb: 1,
+                        playsinline: 1, modestbranding: 1, start: start,
+                        origin: location.origin
+                    },
+                    events: {
+                        onReady: function (e) {
+                            e.target.mute(); e.target.playVideo();
+                            setTimeout(function () { e.target.unMute(); e.target.setVolume(90); }, 400);
+                        },
+                        onStateChange: function (e) {
+                            if (e.data === YT.PlayerState.ENDED) e.target.playVideo();
+                        }
+                    }
+                });
+            };
+        }
+
+        function tryNext() {
+            clearTimeout(attemptTimer);
+            idx++;
+            if (idx >= sources.length) { fallbackToYouTube(); return; }
+
+            // Une instance lente/bloquée ne doit pas figer la télé : au bout de
+            // 7 s sans données, on passe à la suivante.
+            attemptTimer = setTimeout(tryNext, 7000);
+            video.src = sources[idx];
+            video.load();
+            video.muted = true;      // l'autoplay muet est toujours autorisé
+            video.play().catch(function () {});
+        }
+
+        // Succès : des données arrivent → on garde cette source.
+        video.addEventListener('loadeddata', function () {
+            clearTimeout(attemptTimer);
+            if (start > 0 && video.currentTime < start) {
+                try { video.currentTime = start; } catch (e) {}
+            }
+            video.play().catch(function () {});
+        });
+        // Échec de la source courante → suivante.
+        video.addEventListener('error', tryNext);
+        // Reprise en boucle à la fin.
+        video.addEventListener('ended', function () {
+            try { video.currentTime = start > 0 ? start : 0; video.play(); } catch (e) {}
+        });
+
+        if (videoId) tryNext();
     </script>
 </body>
 </html>
