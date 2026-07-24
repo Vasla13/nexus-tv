@@ -31,9 +31,11 @@
         tag.src = 'https://www.youtube.com/iframe_api';
         document.head.appendChild(tag);
 
+        var player = null;
+
         function onYouTubeIframeAPIReady() {
             if (!videoId) return;
-            new YT.Player('yt', {
+            player = new YT.Player('yt', {
                 videoId: videoId,
                 playerVars: {
                     autoplay: 1, controls: 0, rel: 0, fs: 0, disablekb: 1,
@@ -52,6 +54,16 @@
                 }
             });
         }
+
+        // Son spatial : le jeu envoie le volume (0..1) selon la distance.
+        window.addEventListener('message', function (ev) {
+            var d = ev.data || {};
+            if (d.type === 'volume' && player && player.setVolume) {
+                var x = Math.max(0, Math.min(1, +d.value || 0));
+                if (x <= 0) { player.mute(); }
+                else { player.unMute(); player.setVolume(Math.round(x * 100)); }
+            }
+        });
     </script>
 </body>
 </html>
